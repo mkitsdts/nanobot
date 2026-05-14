@@ -118,9 +118,26 @@ def _extract_docx(path: Path,max_size:int) -> str:
     except ImportError:
         return "[error: python-docx not installed]"
     try:
-        doc = DocxDocument(path)
+        doc = DocxDocument(str(path))
         paragraphs: list[str] = [p.text for p in doc.paragraphs if p.text.strip()]
-        return _truncate("\n\n".join(paragraphs), max_size)
+        current_size = 0
+
+        for p in doc.paragraphs:
+            text = p.text.strip()
+            if not text:
+                continue
+
+            # Check if adding this paragraph exceeds the limit
+            if current_size + len(text) > max_size:
+                remaining_space = max_size - current_size
+                if remaining_space > 0:
+                    paragraphs.append(text[:remaining_space])
+                break  # Stop processing immediately to save memory
+
+            paragraphs.append(text)
+            current_size += len(text) + 2  # +2 accounts for the "\n\n" joiner
+
+        return "\n\n".join(paragraphs)
     except Exception as e:
         logger.exception("Failed to extract DOCX {}", path)
         return f"[error: failed to extract DOCX: {e!s}]"
