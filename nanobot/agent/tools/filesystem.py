@@ -361,7 +361,7 @@ class ReadFileTool(_FsTool):
     def _read_office_doc(self, fp: Path) -> str:
         from nanobot.utils.document import extract_text
 
-        result = extract_text(fp)
+        result = extract_text(fp,self._MAX_CHARS)
 
         if result is None:
             return f"Error: Unsupported file format: {fp.suffix}"
