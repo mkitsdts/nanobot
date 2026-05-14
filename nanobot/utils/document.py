@@ -86,10 +86,26 @@ def _extract_pdf(path: Path,max_size:int) -> str:
     try:
         reader = PdfReader(path)
         pages: list[str] = []
+        current_total_size = 0
+
         for i, page in enumerate(reader.pages, 1):
-            text = page.extract_text() or ""
-            pages.append(f"--- Page {i} ---\n{text}")
-        return _truncate("\n\n".join(pages), max_size)
+            # extract one page
+            page_text = page.extract_text() or ""
+            page_header = f"--- Page {i} ---\n"
+            combined_page = page_header + page_text + "\n\n"
+
+            # check current size
+            if current_total_size + len(combined_page) >= max_size:
+                remaining_space = max_size - current_total_size
+                if remaining_space > len(page_header):
+                    pages.append(combined_page[:remaining_space])
+                break
+
+            # calculate current size
+            pages.append(combined_page)
+            current_total_size += len(combined_page)
+
+        return "".join(pages).strip()
     except Exception as e:
         logger.exception("Failed to extract PDF {}", path)
         return f"[error: failed to extract PDF: {e!s}]"
