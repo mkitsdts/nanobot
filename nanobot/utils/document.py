@@ -193,50 +193,73 @@ def _extract_xlsx(path: Path,max_size:int) -> str:
         return f"[error: failed to extract XLSX: {e!s}]"
 
 
-def _extract_pptx(path: Path,max_size:int) -> str:
-    """Extract text from PPTX using python-pptx."""
+def _extract_pptx(path: Path, max_size: int) -> str:
+    """Extract text from PPTX while strictly limiting memory usage."""
     try:
         from pptx import Presentation as PptxPresentation
     except ImportError:
         return "[error: python-pptx not installed]"
+
     try:
-        prs = PptxPresentation(path)
-        slides: list[str] = []
+        prs = PptxPresentation(str(path))
+        extracted_content:list[str] = []
+        current_size = 0
+
         for i, slide in enumerate(prs.slides, 1):
-            slide_text: list[str] = []
+            slide_header = f"--- Slide {i} ---\n"
+            slide_text_list: list[str] = []
+
+            # range ppt
             for shape in slide.shapes:
-                _collect_pptx_shape_text(shape, slide_text)
-            if slide_text:
-                slides.append(f"--- Slide {i} ---\n" + "\n".join(slide_text))
-        return _truncate("\n\n".join(slides), max_size)
+                _collect_pptx_shape_text(shape, slide_text_list, max_size - current_size - len(slide_header))
+
+            if slide_text_list:
+                combined_slide = slide_header + "\n".join(slide_text_list)
+                extracted_content.append(combined_slide)
+                current_size += len(combined_slide) + 2  # joiner "\n\n so plus 2"
+
+            if current_size >= max_size:
+                break
+
+        return "\n\n".join(extracted_content)[:max_size]
     except Exception as e:
         logger.exception("Failed to extract PPTX {}", path)
         return f"[error: failed to extract PPTX: {e!s}]"
 
 
-def _collect_pptx_shape_text(shape, out: list[str]) -> None:
-    """Collect text from a PPTX shape, recursing into groups and tables.
+def _collect_pptx_shape_text(shape, out: list[str], remaining_quota: int) -> None:
+    """Collect text with a safety quota check."""
+    current_out_size = sum(len(s) for s in out)
+    if current_out_size >= remaining_quota:
+        return
 
-    Groups have ``has_text_frame=False`` and must be walked via ``.shapes``;
-    tables are GraphicFrame objects whose cell text lives under ``.table``.
-    """
     sub_shapes = getattr(shape, "shapes", None)
     if sub_shapes is not None:
         for sub in sub_shapes:
-            _collect_pptx_shape_text(sub, out)
+            _collect_pptx_shape_text(sub, out, remaining_quota)
         return
 
+    # handle table
     if getattr(shape, "has_table", False):
         for row in shape.table.rows:
             cells = [cell.text.strip() for cell in row.cells]
             line = "\t".join(cell for cell in cells if cell)
             if line:
+                if (sum(len(s) for s in out) + len(line)) > remaining_quota:
+                    break
                 out.append(line)
         return
 
-    text = getattr(shape, "text", "")
+    # handle text file
+    text = getattr(shape, "text", "").strip()
     if text:
-        out.append(text)
+        if (sum(len(s) for s in out) + len(text)) > remaining_quota:
+            # even though a shape, cut here if it's too long
+            allowable = remaining_quota - sum(len(s) for s in out)
+            if allowable > 0:
+                out.append(text[:allowable])
+        else:
+            out.append(text)
 
 
 def _extract_text_file(path: Path,max_size:int) -> str:
@@ -251,13 +274,6 @@ def _extract_text_file(path: Path,max_size:int) -> str:
     except Exception as e:
         logger.exception("Failed to read text file {}", path)
         return f"[error: failed to read file: {e!s}]"
-
-
-def _truncate(text: str, max_length: int) -> str:
-    """Truncate text with a suffix indicating truncation."""
-    if len(text) <= max_length:
-        return text
-    return text[:max_length] + f"... (truncated, {len(text)} chars total)"
 
 
 def _is_text_extension(ext: str) -> bool:
