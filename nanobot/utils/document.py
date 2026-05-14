@@ -37,7 +37,7 @@ SUPPORTED_EXTENSIONS: set[str] = {
     ".webp",
 }
 
-def extract_text(path: Path,max_size:int = 200_000) -> str | None:
+def extract_text(path: Path,max_size:int) -> str | None:
     """Extract text from a file.
 
     Args:
