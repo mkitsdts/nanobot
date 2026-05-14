@@ -262,18 +262,22 @@ def _collect_pptx_shape_text(shape, out: list[str], remaining_quota: int) -> Non
             out.append(text)
 
 
-def _extract_text_file(path: Path,max_size:int) -> str:
-    """Extract text from a plain text file."""
-    try:
-        # Try UTF-8 first, then latin-1 fallback
+def _extract_text_file(path: Path, max_size: int) -> str:
+    """Extract text from a plain text file with memory-safe streaming."""
+    # Attempt UTF-8 first, fallback to latin-1 if decoding fails
+    for encoding in ["utf-8", "latin-1"]:
         try:
-            content = path.read_text(encoding="utf-8")
+            with path.open("r", encoding=encoding, errors="replace") as f:
+                # Read only up to max_size characters
+                # This prevents loading the entire file into RAM
+                return f.read(max_size)
         except UnicodeDecodeError:
-            content = path.read_text(encoding="latin-1")
-        return _truncate(content, max_size)
-    except Exception as e:
-        logger.exception("Failed to read text file {}", path)
-        return f"[error: failed to read file: {e!s}]"
+            continue
+        except Exception as e:
+            logger.exception("Failed to read text file {}", path)
+            return f"[error: failed to read file: {e!s}]"
+
+    return "[error: could not decode file with supported encodings]"
 
 
 def _is_text_extension(ext: str) -> bool:
