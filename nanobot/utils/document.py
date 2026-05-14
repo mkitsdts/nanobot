@@ -37,14 +37,12 @@ SUPPORTED_EXTENSIONS: set[str] = {
     ".webp",
 }
 
-_MAX_TEXT_LENGTH = 200_000
-
-
-def extract_text(path: Path) -> str | None:
+def extract_text(path: Path,max_size:int = 200_000) -> str | None:
     """Extract text from a file.
 
     Args:
         path: Path to the file.
+        max_size: Maximum size in file content bytes.
 
     Returns:
         Extracted text as string, None for unsupported types,
@@ -62,15 +60,15 @@ def extract_text(path: Path) -> str | None:
     # startup does not pay the ~25 MB cost of loading openpyxl /
     # python-docx / python-pptx / pypdf up front (see issue #3422).
     if ext == ".pdf":
-        return _extract_pdf(path)
+        return _extract_pdf(path,max_size)
     elif ext == ".docx":
-        return _extract_docx(path)
+        return _extract_docx(path,max_size)
     elif ext == ".xlsx":
-        return _extract_xlsx(path)
+        return _extract_xlsx(path,max_size)
     elif ext == ".pptx":
-        return _extract_pptx(path)
+        return _extract_pptx(path,max_size)
     elif _is_text_extension(ext):
-        return _extract_text_file(path)
+        return _extract_text_file(path,max_size)
     elif ext in {".png", ".jpg", ".jpeg", ".gif", ".webp"}:
         # Image files - for future OCR support
         return f"[image: {path.name}]"
@@ -79,7 +77,7 @@ def extract_text(path: Path) -> str | None:
         return None
 
 
-def _extract_pdf(path: Path) -> str:
+def _extract_pdf(path: Path,max_size:int) -> str:
     """Extract text from PDF using pypdf."""
     try:
         from pypdf import PdfReader
@@ -91,13 +89,13 @@ def _extract_pdf(path: Path) -> str:
         for i, page in enumerate(reader.pages, 1):
             text = page.extract_text() or ""
             pages.append(f"--- Page {i} ---\n{text}")
-        return _truncate("\n\n".join(pages), _MAX_TEXT_LENGTH)
+        return _truncate("\n\n".join(pages), max_size)
     except Exception as e:
         logger.exception("Failed to extract PDF {}", path)
         return f"[error: failed to extract PDF: {e!s}]"
 
 
-def _extract_docx(path: Path) -> str:
+def _extract_docx(path: Path,max_size:int) -> str:
     """Extract text from DOCX using python-docx."""
     try:
         from docx import Document as DocxDocument
@@ -106,13 +104,13 @@ def _extract_docx(path: Path) -> str:
     try:
         doc = DocxDocument(path)
         paragraphs: list[str] = [p.text for p in doc.paragraphs if p.text.strip()]
-        return _truncate("\n\n".join(paragraphs), _MAX_TEXT_LENGTH)
+        return _truncate("\n\n".join(paragraphs), max_size)
     except Exception as e:
         logger.exception("Failed to extract DOCX {}", path)
         return f"[error: failed to extract DOCX: {e!s}]"
 
 
-def _extract_xlsx(path: Path) -> str:
+def _extract_xlsx(path: Path,max_size:int) -> str:
     """Extract text from XLSX using openpyxl."""
     try:
         from openpyxl import load_workbook
@@ -120,18 +118,41 @@ def _extract_xlsx(path: Path) -> str:
         return "[error: openpyxl not installed]"
     try:
         wb = load_workbook(path, read_only=True, data_only=True)
+        current_total_size=0
         try:
             sheets: list[str] = []
             for sheet_name in wb.sheetnames:
+                if current_total_size >= max_size:
+                    break
+
                 ws = wb[sheet_name]
-                rows: list[str] = []
+                header = f"--- Sheet: {sheet_name} ---\n"
+                sheets.append(header)
+                current_total_size += len(header)
+
+                #
                 for row in ws.iter_rows(values_only=True):
-                    row_text = "\t".join(str(cell) if cell is not None else "" for cell in row)
-                    if row_text.strip():
-                        rows.append(row_text)
-                if rows:
-                    sheets.append(f"--- Sheet: {sheet_name} ---\n" + "\n".join(rows))
-            return _truncate("\n\n".join(sheets), _MAX_TEXT_LENGTH)
+                    # Join cell values with tabs, skipping empty cells
+                    raw_line = "\t".join(str(c) if c is not None else "" for c in row).strip()
+                    if not raw_line:
+                        continue
+
+                    line = raw_line + "\n"
+                    length = len(line)
+
+                    if current_total_size + length > max_size:
+                        #
+                        sheets.append(line[:max_size - current_total_size])
+                        current_total_size = max_size
+                        break
+
+                    sheets.append(line)
+                    current_total_size += length
+
+                sheets.append("\n")
+                current_total_size += 1
+
+            return "".join(sheets)
         finally:
             wb.close()
     except Exception as e:
@@ -139,7 +160,7 @@ def _extract_xlsx(path: Path) -> str:
         return f"[error: failed to extract XLSX: {e!s}]"
 
 
-def _extract_pptx(path: Path) -> str:
+def _extract_pptx(path: Path,max_size:int) -> str:
     """Extract text from PPTX using python-pptx."""
     try:
         from pptx import Presentation as PptxPresentation
@@ -154,7 +175,7 @@ def _extract_pptx(path: Path) -> str:
                 _collect_pptx_shape_text(shape, slide_text)
             if slide_text:
                 slides.append(f"--- Slide {i} ---\n" + "\n".join(slide_text))
-        return _truncate("\n\n".join(slides), _MAX_TEXT_LENGTH)
+        return _truncate("\n\n".join(slides), max_size)
     except Exception as e:
         logger.exception("Failed to extract PPTX {}", path)
         return f"[error: failed to extract PPTX: {e!s}]"
@@ -185,7 +206,7 @@ def _collect_pptx_shape_text(shape, out: list[str]) -> None:
         out.append(text)
 
 
-def _extract_text_file(path: Path) -> str:
+def _extract_text_file(path: Path,max_size:int) -> str:
     """Extract text from a plain text file."""
     try:
         # Try UTF-8 first, then latin-1 fallback
@@ -193,7 +214,7 @@ def _extract_text_file(path: Path) -> str:
             content = path.read_text(encoding="utf-8")
         except UnicodeDecodeError:
             content = path.read_text(encoding="latin-1")
-        return _truncate(content, _MAX_TEXT_LENGTH)
+        return _truncate(content, max_size)
     except Exception as e:
         logger.exception("Failed to read text file {}", path)
         return f"[error: failed to read file: {e!s}]"
