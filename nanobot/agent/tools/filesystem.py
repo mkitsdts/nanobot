@@ -173,6 +173,7 @@ class ReadFileTool(_FsTool):
     _MAX_CHARS = 128_000
     _DEFAULT_LIMIT = 2000
     _MAX_PDF_PAGES = 20
+    _MAX_FILE_CONTENT_BYTE_SIZE = 100*1024*1024
 
     @property
     def name(self) -> str:
@@ -209,6 +210,10 @@ class ReadFileTool(_FsTool):
                 return f"Error: File not found: {path}"
             if not fp.is_file():
                 return f"Error: Not a file: {path}"
+
+            size_in_bytes = fp.stat().st_size
+            if size_in_bytes > self._MAX_FILE_CONTENT_BYTE_SIZE:
+                return f"Error: File too large: {path}"
 
             # PDF support
             if fp.suffix.lower() == ".pdf":
